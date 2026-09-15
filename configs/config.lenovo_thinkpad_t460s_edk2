@@ -3,3 +3,7 @@ CONFIG_BOARD_LENOVO_T460S=y
 CONFIG_PAYLOAD_EDK2=y
 CONFIG_INTEL_GMA_HAVE_VBT=y
 CONFIG_INTEL_GMA_VBT_FILE="src/mainboard/lenovo/sklkbl_thinkpad/variants/t460s/data.vbt"
+CONFIG_HAVE_IFD_BIN=y
+CONFIG_IFD_BIN_PATH="src/mainboard/lenovo/sklkbl_thinkpad/variants/t460s/flashdescriptor.bin"
+CONFIG_HAVE_GBE_BIN=y
+CONFIG_GBE_BIN_PATH="src/mainboard/lenovo/sklkbl_thinkpad/variants/t460s/gbe.bin"
