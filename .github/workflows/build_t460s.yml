@@ -1,4 +1,4 @@
-name: Build ThinkPad T460s coreboot
+name: Build ThinkPad T460s coreboot with EDK2
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
 
 jobs:
   build:
-    name: Build ThinkPad T460s coreboot ROM
+    name: Build ThinkPad T460s (coreboot + EDK2 UEFI)
     runs-on: ubuntu-latest
 
     steps:
@@ -31,14 +31,14 @@ jobs:
             /bin/bash -c "
               git config --global --add safe.directory /home/coreboot/coreboot && \
               make distclean || true && \
-              make defconfig KBUILD_DEFCONFIG=configs/config.lenovo_thinkpad_t460s && \
+              make defconfig KBUILD_DEFCONFIG=configs/config.lenovo_thinkpad_t460s_edk2 && \
               make -j\$(nproc)
             "
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: coreboot-t460s-rom
+          name: coreboot-t460s-edk2-rom
           path: |
             build/coreboot.rom
             build/config.h
