@@ -13,8 +13,6 @@ jobs:
   build:
     name: Build ThinkPad T460s coreboot ROM
     runs-on: ubuntu-latest
-    container:
-      image: coreboot/coreboot-sdk:testing
 
     steps:
       - name: Checkout repository
@@ -23,17 +21,19 @@ jobs:
           submodules: true
           fetch-depth: 1
 
-      - name: Mark git directory safe in container
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Configure for Lenovo ThinkPad T460s
+      - name: Build in coreboot SDK container
         run: |
-          make distclean || true
-          make defconfig KBUILD_DEFCONFIG=configs/config.lenovo_thinkpad_t460s
-
-      - name: Build coreboot
-        run: |
-          make -j$(nproc)
+          docker run --rm \
+            -u 0:0 \
+            -v "$GITHUB_WORKSPACE":/home/coreboot/coreboot \
+            -w /home/coreboot/coreboot \
+            coreboot/coreboot-sdk:testing \
+            /bin/bash -c "
+              git config --global --add safe.directory /home/coreboot/coreboot && \
+              make distclean || true && \
+              make defconfig KBUILD_DEFCONFIG=configs/config.lenovo_thinkpad_t460s && \
+              make -j\$(nproc)
+            "
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
