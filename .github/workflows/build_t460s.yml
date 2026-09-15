@@ -1,0 +1,46 @@
+name: Build ThinkPad T460s coreboot
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build ThinkPad T460s coreboot ROM
+    runs-on: ubuntu-latest
+    container:
+      image: coreboot/coreboot-sdk:testing
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
+
+      - name: Mark git directory safe in container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Configure for Lenovo ThinkPad T460s
+        run: |
+          make distclean || true
+          make defconfig KBUILD_DEFCONFIG=configs/config.lenovo_thinkpad_t460s
+
+      - name: Build coreboot
+        run: |
+          make -j$(nproc)
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coreboot-t460s-rom
+          path: |
+            build/coreboot.rom
+            build/config.h
+            .config
+          if-no-files-found: error
