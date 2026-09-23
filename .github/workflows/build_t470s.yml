@@ -2,6 +2,12 @@ name: Build ThinkPad T470s coreboot with EDK2
 
 on:
   workflow_dispatch:
+    inputs:
+      build_ref:
+        description: "Branch or ref to build"
+        required: true
+        default: t470s-ci
+        type: string
 
 permissions:
   contents: read
@@ -15,7 +21,7 @@ jobs:
       - name: Checkout selected branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ inputs.build_ref }}
           submodules: true
           fetch-depth: 0
 
@@ -26,27 +32,31 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch --no-tags origin main
-          # This merge is intentionally kept in the runner workspace only.
-          # A conflict makes this step fail, so the build will not start.
+          # This merge exists only in the runner workspace.
+          # A conflict makes this step fail, so compilation does not start.
           git merge --no-ff --no-edit --no-commit origin/main
           git status --short
           git log --oneline -2
 
       - name: Build in coreboot SDK container
+        shell: bash
         run: |
+          set -euo pipefail
           docker run --rm \
             -u 0:0 \
             -v "$GITHUB_WORKSPACE":/home/coreboot/coreboot \
             -w /home/coreboot/coreboot \
             coreboot/coreboot-sdk:testing \
-            /bin/bash -c "
-              git config --global --add safe.directory /home/coreboot/coreboot && \
-              make distclean || true && \
-              make defconfig KBUILD_DEFCONFIG=configs/config.lenovo_thinkpad_t470s_edk2 && \
-              make -j\$(nproc)
-            "
+            /bin/bash -c '
+              set -euo pipefail
+              git config --global --add safe.directory /home/coreboot/coreboot
+              make distclean || true
+              make defconfig KBUILD_DEFCONFIG=configs/config.lenovo_thinkpad_t470s_edk2
+              make -j"$(nproc)"
+            '
 
       - name: Check ROM size
+        shell: bash
         run: test "$(stat -c %s build/coreboot.rom)" -eq 16777216
 
       - name: Upload build artifacts
