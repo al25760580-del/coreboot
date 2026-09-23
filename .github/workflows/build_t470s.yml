@@ -1,0 +1,70 @@
+name: Build ThinkPad T470s coreboot with EDK2
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_ref:
+        description: "Branch or ref to build"
+        required: true
+        default: t470s-ci
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ThinkPad T470s (coreboot + EDK2 UEFI)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.build_ref }}
+          submodules: true
+          fetch-depth: 0
+
+      - name: Merge latest main into the build workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "GitHub Actions"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags origin main
+          # This merge exists only in the runner workspace.
+          # A conflict makes this step fail, so compilation does not start.
+          git merge --no-ff --no-edit --no-commit origin/main
+          git status --short
+          git log --oneline -2
+
+      - name: Build in coreboot SDK container
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -u 0:0 \
+            -v "$GITHUB_WORKSPACE":/home/coreboot/coreboot \
+            -w /home/coreboot/coreboot \
+            coreboot/coreboot-sdk:testing \
+            /bin/bash -c '
+              set -euo pipefail
+              git config --global --add safe.directory /home/coreboot/coreboot
+              make distclean || true
+              make defconfig KBUILD_DEFCONFIG=configs/config.lenovo_thinkpad_t470s_edk2
+              make -j"$(nproc)"
+            '
+
+      - name: Check ROM size
+        shell: bash
+        run: test "$(stat -c %s build/coreboot.rom)" -eq 16777216
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coreboot-t470s-edk2-rom
+          path: |
+            build/coreboot.rom
+            build/config.h
+            .config
+          if-no-files-found: error
