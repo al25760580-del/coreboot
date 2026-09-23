@@ -1,0 +1,52 @@
+name: Build ThinkPad T470s coreboot with EDK2
+
+on:
+  push:
+    branches:
+      - t470s-ci
+  pull_request:
+    branches:
+      - t470s-ci
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ThinkPad T470s (coreboot + EDK2 UEFI)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 1
+
+      - name: Build in coreboot SDK container
+        run: |
+          docker run --rm \
+            -u 0:0 \
+            -v "$GITHUB_WORKSPACE":/home/coreboot/coreboot \
+            -w /home/coreboot/coreboot \
+            coreboot/coreboot-sdk:testing \
+            /bin/bash -c "
+              git config --global --add safe.directory /home/coreboot/coreboot && \
+              make distclean || true && \
+              make defconfig KBUILD_DEFCONFIG=configs/config.lenovo_thinkpad_t470s_edk2 && \
+              make -j\$(nproc)
+            "
+
+      - name: Check ROM size
+        run: test "$(stat -c %s build/coreboot.rom)" -eq 16777216
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coreboot-t470s-edk2-rom
+          path: |
+            build/coreboot.rom
+            build/config.h
+            .config
+          if-no-files-found: error
