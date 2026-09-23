@@ -1,12 +1,6 @@
 name: Build ThinkPad T470s coreboot with EDK2
 
 on:
-  push:
-    branches:
-      - t470s-ci
-  pull_request:
-    branches:
-      - t470s-ci
   workflow_dispatch:
 
 permissions:
@@ -18,11 +12,25 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout selected branch
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.ref_name }}
           submodules: true
-          fetch-depth: 1
+          fetch-depth: 0
+
+      - name: Merge latest main into the build workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "GitHub Actions"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags origin main
+          # This merge is intentionally kept in the runner workspace only.
+          # A conflict makes this step fail, so the build will not start.
+          git merge --no-ff --no-edit --no-commit origin/main
+          git status --short
+          git log --oneline -2
 
       - name: Build in coreboot SDK container
         run: |
