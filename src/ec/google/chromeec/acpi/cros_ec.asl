@@ -4,6 +4,15 @@
 #define LPC_GMR_SIZE 0x10000
 #endif
 
+/*
+ * SYNC IRQ in CREC _CRS breaks the Windows ChromeEC driver.
+ * Linux falls back to ACPI notify, so only keep it for ChromeOS builds.
+ */
+#if !CONFIG(CHROMEOS)
+#undef EC_ENABLE_SYNC_IRQ
+#undef EC_ENABLE_SYNC_IRQ_GPIO
+#endif
+
 Device (CREC)
 {
 	Name (_HID, CONFIG_EC_GOOGLE_CHROMEEC_ACPI_HID)
@@ -65,11 +74,11 @@ CONFIG(EC_GOOGLE_CHROMEEC_LPC_GENERIC_MEMORY_RANGE)
 
 		Method (_STA, 0)
 		{
-			If (DFUD || KEYB) {
-				Return (0xF)
-			}
-
+#if CONFIG(SYSTEM_TYPE_MINIPC) || CONFIG(SYSTEM_TYPE_ALL_IN_ONE)
 			Return (0)
+#else
+			Return (0xF)
+#endif
 		}
 	}
 #endif

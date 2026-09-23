@@ -87,9 +87,9 @@ static int chipset_prev_sleep_state(const struct chipset_power_state *ps)
 /* Entry from cpu/intel/car/romstage.c */
 void mainboard_romstage_entry(void)
 {
+	struct memory_init_params memory_init_params = {};
 	struct chipset_power_state *ps;
 	int prev_sleep_state;
-	struct mrc_params mp;
 
 	set_max_freq();
 
@@ -97,8 +97,7 @@ void mainboard_romstage_entry(void)
 
 	gfx_init();
 
-	memset(&mp, 0, sizeof(mp));
-	mainboard_fill_mrc_params(&mp);
+	mainboard_memory_init_params(&memory_init_params);
 
 	timestamp_add_now(TS_INITRAM_START);
 
@@ -111,8 +110,12 @@ void mainboard_romstage_entry(void)
 
 	elog_boot_notify(s3resume);
 
-	/* Initialize RAM */
-	raminit(&mp, prev_sleep_state);
+	memory_init_params.txe_uma_size_mb = txe_uma_get_size_mb();
+
+	raminit(&memory_init_params, prev_sleep_state);
+
+	txe_uma_did(memory_init_params.txe_uma_base_mb,
+		    memory_init_params.txe_uma_size_mb);
 
 	timestamp_add_now(TS_INITRAM_END);
 

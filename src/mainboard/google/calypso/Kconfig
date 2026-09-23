@@ -7,6 +7,7 @@ config BOARD_GOOGLE_CALYPSO_COMMON
 	# FIXME: keep ADB for development phase
 	select GBB_FLAG_ENABLE_ADB if VBOOT
 	select MAINBOARD_HAS_CHROMEOS
+	select MAINBOARD_REINIT_QUP_SE
 	select SOC_QUALCOMM_PCIE_ASYNCHRONOUS_INIT
 	select SPI_FLASH
 	select SPI_FLASH_FORCE_4_BYTE_ADDR_MODE
@@ -130,6 +131,7 @@ config MAINBOARD_HAS_CHROME_EC
 	bool
 	default n
 	select EC_GOOGLE_CHROMEEC
+	select EC_GOOGLE_CHROMEEC_POSTCODE
 	select EC_GOOGLE_CHROMEEC_RTC
 	select EC_GOOGLE_CHROMEEC_SPI
 	select EC_GOOGLE_CHROMEEC_SWITCHES if VBOOT
@@ -178,8 +180,28 @@ config MAINBOARD_GPIO_PIN_FOR_GSC_AP_INTERRUPT
 	  used for the interrupt line from the Google Security Chip (GSC) to the
 	  Application Processor (AP).
 
+config MAINBOARD_REINIT_QUP_SE
+	bool
+	default n
+	help
+	  Select this option if QCLIB execution overrides or clobbers the QUP
+	  Serial Engine (SE) configurations set up earlier in boot, causing
+	  broken communication with peripherals such as the GSC/TPM over I2C
+	  or the ChromeOS EC over SPI. When enabled, the mainboard/SoC will
+	  re-initialize the affected I2C and SPI buses after QCLIB runs.
+
 config FMDFILE
 	default "src/mainboard/\$(CONFIG_MAINBOARD_DIR)/chromeos.fmd" if MAINBOARD_HAS_GOOGLE_TPM
 	default "src/mainboard/\$(CONFIG_MAINBOARD_DIR)/chromeos-nogsc.fmd"
+
+config BATTERY_TRICKLE_VOLTAGE_MV
+	int
+	default 6400
+	help
+	  Battery voltage threshold in millivolts (mV) below which firmware
+	  must wait for slow/trickle recovery before booting.
+	  - SMB2370 FULLON / fast-charge entry limit (3.2V/cell):
+	    * 2S battery designs: 6400 mV
+	    * 3S battery designs: 9600 mV
 
 endif # BOARD_GOOGLE_CALYPSO_COMMON

@@ -36,6 +36,17 @@
 #define SMBx_SCHG_TYPE_C_SUSPEND_LEGACY_CHARGERS(x) \
 (((x) << 16) | SCHG_TYPE_C_SUSPEND_LEGACY_CHARGERS)
 
+#define SCHG_CHGR_PRE_CHARGE_CURRENT_CFG 0x2660
+#define PRE_CHARGE_CURRENT_250MA_STEP_50MA 0x5 /* 50mA * 5 */
+#define SMB1_CHGR_MAX_PRE_CHARGE_CFG ((SMB1_SLAVE_ID << 16) | SCHG_CHGR_PRE_CHARGE_CURRENT_CFG)
+#define SMB2_CHGR_MAX_PRE_CHARGE_CFG ((SMB2_SLAVE_ID << 16) | SCHG_CHGR_PRE_CHARGE_CURRENT_CFG)
+
+#define SCHG_CHGR_STATUS_REG 0x2606
+#define SMB1_CHGR_STATUS_REG ((SMB1_SLAVE_ID << 16) | SCHG_CHGR_STATUS_REG)
+#define SMB2_CHGR_STATUS_REG ((SMB2_SLAVE_ID << 16) | SCHG_CHGR_STATUS_REG)
+#define CHGR_STATUS_MASK 0x07
+#define CHGR_STATUS_FAST_CHARGE 0x03
+
 #define SCHG_CHGR_CHARGING_FCC 0x260A
 #define SMB1_CHGR_CHARGING_FCC ((SMB1_SLAVE_ID << 16) | SCHG_CHGR_CHARGING_FCC)
 #define SMB2_CHGR_CHARGING_FCC ((SMB2_SLAVE_ID << 16) | SCHG_CHGR_CHARGING_FCC)
@@ -77,6 +88,8 @@
 #define LOW_BATTERY_CHARGING_LOOP_EXIT_MS (3 * 60 * 1000) /* 3min */
 #define DELAY_CHARGING_ACTIVE_LB_MS 4000 /* 4sec */
 #define AC_DISCONNECT_DEBOUNCE_MS 2000 /* 2sec */
+#define ICURR_READ_RETRY_COUNT 5
+#define ICURR_READ_RETRY_DELAY_MS 100 /* 5 * 100ms = 500ms total window */
 
 enum charging_status {
 	CHRG_DISABLE,
@@ -106,6 +119,22 @@ void init_sdam_config(void)
 	for (size_t i = 0; i < count; i++)
 		spmi_rmw8(default_sdam_config[i].addr, default_sdam_config[i].mask,
 				default_sdam_config[i].value);
+}
+
+/*
+ * Check if the SMBxxxx charger has transitioned from trickle/pre-charge
+ * into fast charge mode (BATFET closed and FCC loop engaged).
+ */
+bool is_fast_charge_ready(void)
+{
+	int smb1_status1 = spmi_read8_safe(SMB1_CHGR_STATUS_REG);
+	int smb2_status1 = spmi_read8_safe(SMB2_CHGR_STATUS_REG);
+
+	if ((smb1_status1 >= 0 && (smb1_status1 & CHGR_STATUS_MASK) == CHGR_STATUS_FAST_CHARGE) ||
+	    (smb2_status1 >= 0 && (smb2_status1 & CHGR_STATUS_MASK) == CHGR_STATUS_FAST_CHARGE))
+		return true;
+
+	return false;
 }
 
 /*
@@ -150,12 +179,27 @@ static void smb_enter_normal_power_psm_at_offmode(void)
 
 static int get_battery_icurr_ma(void)
 {
-	/* Read battery i-current value */
-	mdelay(5);
-	int icurr = spmi_read8_safe(SMB1_CHGR_CHARGING_FCC);
-	if (icurr <= 0) {
+	int icurr = 0;
+
+	for (int retry = 0; retry < ICURR_READ_RETRY_COUNT; retry++) {
+		/* Read battery i-current value from SMB1 */
 		mdelay(5);
-		icurr = spmi_read8_safe(SMB2_CHGR_CHARGING_FCC);
+		icurr = spmi_read8_safe(SMB1_CHGR_CHARGING_FCC);
+		if (icurr <= 0) {
+			mdelay(5);
+			icurr = spmi_read8_safe(SMB2_CHGR_CHARGING_FCC);
+		}
+
+		/* Valid charging current detected */
+		if (icurr > 0)
+			break;
+
+		/* Transient drop to zero: wait before next retry */
+		if (retry < ICURR_READ_RETRY_COUNT - 1) {
+			printk(BIOS_DEBUG, "Transient zero icurr (retry %d/%d)\n",
+			       retry + 1, ICURR_READ_RETRY_COUNT);
+			mdelay(ICURR_READ_RETRY_DELAY_MS);
+		}
 	}
 
 	/* Final safety: if both failed (still negative), treat as 0 */
@@ -459,6 +503,11 @@ void enable_slow_battery_charging(void)
 	printk(BIOS_INFO, "Use slow charging without fast charge support\n");
 	spmi_write8(SMB1_CHGR_MAX_FCC_CFG, FCC_3A_STEP_50MA);
 	spmi_write8(SMB2_CHGR_MAX_FCC_CFG, FCC_3A_STEP_50MA);
+
+	/* Set pre-charge current to 1A so recovery completes quickly */
+	spmi_write8(SMB1_CHGR_MAX_PRE_CHARGE_CFG, PRE_CHARGE_CURRENT_250MA_STEP_50MA);
+	spmi_write8(SMB2_CHGR_MAX_PRE_CHARGE_CFG, PRE_CHARGE_CURRENT_250MA_STEP_50MA);
+
 	spmi_write8(SMB1_CHGR_CHRG_EN_CMD, CHRG_ENABLE);
 	spmi_write8(SMB2_CHGR_CHRG_EN_CMD, CHRG_ENABLE);
 }

@@ -12,6 +12,11 @@ cpu_microcode_bins += \
        3rdparty/intel-microcode/intel-ucode/06-cc-03
 endif
 
+ifeq ($(CONFIG_SOC_INTEL_WILDCATLAKE),y)
+cpu_microcode_bins += \
+       3rdparty/intel-microcode/intel-ucode/06-d5-01
+endif
+
 # all (bootblock, verstage, romstage, postcar, ramstage)
 all-y += gpio.c
 all-y += isclk.c
@@ -48,10 +53,14 @@ smm-y += xhci.c
 CPPFLAGS_common += -I$(src)/soc/intel/pantherlake
 CPPFLAGS_common += -I$(src)/soc/intel/pantherlake/include
 
-# FSP repo is missing some PTL headers, so add the vendorcode headers as a
+# FSP repo is missing some PTL/WCL headers, so add the vendorcode headers as a
 # fallback. See: https://github.com/intel/FSP/issues/129
 ifeq ($(CONFIG_FSP_TYPE_IOT),y)
+ifeq ($(CONFIG_SOC_INTEL_WILDCATLAKE),y)
+CPPFLAGS_common += -idirafter $(top)/src/vendorcode/intel/fsp/fsp2_0/wildcatlake
+else
 CPPFLAGS_common += -idirafter $(top)/src/vendorcode/intel/fsp/fsp2_0/pantherlake
+endif
 endif
 
 endif

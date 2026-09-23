@@ -11,7 +11,8 @@
 enum camera_device_type {
 	DEV_TYPE_SENSOR = 0,
 	DEV_TYPE_VCM,
-	DEV_TYPE_ROM
+	DEV_TYPE_ROM,
+	DEV_TYPE_PMIC = 0xB
 };
 
 enum platform_type {
@@ -201,7 +202,9 @@ struct intel_ssdb {
 	uint8_t flash_id;			/* Flash ID: 0: default, 1: flash support */
 	uint8_t phy_config;			/* PHY config: 0: DPHY, 1: CPHY */
 	uint8_t lane_config;			/* 0: 1 lane, 1: 2 lanes,
-						   2: 3 lanes, 3: 4 lanes */
+						   2: 3 lanes, 3: 4 lanes.
+						   Derived from lanes_used when
+						   filling SSDB defaults. */
 	uint8_t use_ext_mclk_source;		/* 0: internal, 1: external */
 	uint8_t reserved[5];			/* Padding to match SSDB_SIZE */
 } __packed;

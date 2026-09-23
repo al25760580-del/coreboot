@@ -134,6 +134,10 @@ struct drivers_intel_mipi_camera_config {
 	const char *acpi_name;
 	const char *chip_name;
 	unsigned int acpi_uid;
+	/* Absolute ACPI path for _DEP (e.g. "\\_SB.PCI0.I2C2.CLP0" or a sensor path) */
+	const char *acpi_dep;
+	/* If set, _STA returns this object (e.g. "\\_SB.PCI0.CSTA") */
+	const char *acpi_sta;
 	const char *pr0;
 
 	/* Settings specific to CIO2 device */
@@ -141,6 +145,13 @@ struct drivers_intel_mipi_camera_config {
 	uint32_t cio2_lanes_used[MAX_PORT_ENTRIES];
 	const char *cio2_lane_endpoint[MAX_PORT_ENTRIES];
 	uint32_t cio2_prt[MAX_PORT_ENTRIES];
+	/*
+	 * When true, Scope into the parent PCI device's existing ACPI object
+	 * (DSDT Device (CIO2) / Device (IPU0)) and only emit port/_DSD.
+	 * When false (default), create Device () under the PCI parent -- needed
+	 * on platforms whose DSDT has no IPU/CIO stub (typical JSL+ Chromebooks).
+	 */
+	bool scope_into_parent;
 
 	/* Settings specific to camera sensor */
 
@@ -167,6 +178,7 @@ struct drivers_intel_mipi_camera_config {
 
 	/* Settings specific to vcm */
 	const char *vcm_compat;
+
 	/* Does the device have a power resource entries */
 	bool has_power_resource;
 	/* Perform low power probe */

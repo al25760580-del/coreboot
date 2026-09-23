@@ -52,43 +52,12 @@ static void load_qc_se_firmware_early(void)
 	gpi_firmware_load(QUP_3_GSI_BASE);
 }
 
-static bool is_low_power_boot_with_charger(void)
-{
-	bool ret = false;
-	enum boot_mode_t boot_mode = get_boot_mode();
-	if ((boot_mode == LB_BOOT_MODE_LOW_BATTERY_CHARGING) ||
-	    (boot_mode == LB_BOOT_MODE_OFFMODE_CHARGING) ||
-	    (boot_mode == LB_BOOT_MODE_RTC_WAKE))
-		ret = true;
-
-	return ret;
-}
-
 #if CONFIG(PLATFORM_HAS_OFF_MODE_CHARGING_INDICATOR)
 bool platform_is_off_mode_charging_active(void)
 {
 	return (get_boot_mode() == LB_BOOT_MODE_OFFMODE_CHARGING);
 }
 #endif
-
-static bool board_support_dead_battery_charging(void)
-{
-	uint32_t capacity;
-
-	if (!CONFIG(EC_GOOGLE_CHROMEEC))
-		return false;
-
-	if (google_chromeec_read_batt_remaining_capacity(&capacity) < 0) {
-		printk(BIOS_WARNING, "Failed to get battery capacity; defaulting to slow charging\n");
-		return true;
-	}
-
-	/*
-	 * If the remaining battery capacity is less than or equal to the
-	 * threshold, set dead battery charging mode.
-	 */
-	return capacity <= DEAD_BATT_CHG_THRESHOLD_MAH;
-}
 
 /*
  * Handle charging and UI states for low-power or off-mode boot scenarios.
@@ -100,16 +69,10 @@ static void handle_low_power_charging_boot(enum boot_mode_t boot_mode)
 	if (!pll_init_and_set(apss_ncc0, L_VAL_710P4MHz))
 		printk(BIOS_DEBUG, "CPU Frequency set to 710MHz\n");
 
-	if (board_support_dead_battery_charging())
-		configure_dead_battery_boot();
-
 	/* Placeholder for display stop before launching charging applet */
 
 	if (CONFIG(EC_GOOGLE_CHROMEEC) && detect_ac_unplug_event())
 		chromeec_finalize_and_poweroff(false);
-
-	/* FIXME: Add fast charging support */
-	enable_slow_battery_charging();
 
 	/* Boot to charging applet; if this fails, the applet should trigger a reset */
 	launch_charger_applet(boot_mode);
@@ -150,6 +113,9 @@ static void mainboard_init(void *chip_info)
 		handle_low_power_charging_boot(boot_mode);
 		halt();
 	}
+
+	/* FIXME: Enable slow battery charging until fast charging support is added */
+	enable_slow_battery_charging();
 }
 
 static void setup_audio_gpios(void)
