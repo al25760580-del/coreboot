@@ -20,6 +20,7 @@
 #define UUID_DSM_SENSOR		"822ace8f-2814-4174-a56b-5f029fe079ee"
 #define UUID_DSM_I2C		"26257549-9271-4ca4-bb43-c4899d5a4881"
 #define UUID_DSM_I2C_V2		"5815c5c8-c47d-477b-9a8d-76173176414b"
+#define UUID_DSM_GPIO		"79234640-9e10-4fea-a5c1-b5aa8b19756f"
 #define UUID_DSM_CVF		"02f55f0c-2e63-4f05-84f3-bf1980f9af79"
 #define DEFAULT_ENDPOINT	0
 #define DEFAULT_REMOTE_NAME	"\\_SB.PCI0.CIO2"
@@ -391,6 +392,47 @@ static void camera_generate_dsm_i2c_v2(const struct device *dev)
 }
 
 /*
+ * Generate ASL DSM code for GPIO device count and descriptors.
+ *
+ * Windows INT347x sensor drivers query this UUID during bind. Boards that put
+ * camera GPIOs on the PMIC / discrete control-logic device report an empty set
+ * here. Emitting the UUID with count 0 still satisfies the probe; omitting it
+ * fails the DSM.
+ *
+ * INT347x only calls function 1 (GPIO count) on this UUID - there is no
+ * function-0 "query supported functions" step (same pattern as the I2C
+ * address UUID DSM above). Only function 1 is implemented.
+ *
+ * Generated ASL:
+ * If (LEqual (Local0, ToUUID ("79234640-9e10-4fea-a5c1-b5aa8b19756f"))) {
+ *     ToInteger (Arg2, Local1)
+ *     If (LEqual (Local1, 1)) {
+ *         Return (Zero)  // gpio_count
+ *     }
+ * }
+ */
+static void camera_generate_dsm_gpio(const struct device *dev)
+{
+	/*
+	 * Sensor-local GPIO descriptors are unused on current boards (GPIOs live
+	 * on the control-logic / PMIC device). Keep |dev| for future expansion.
+	 */
+	(void)dev;
+	acpigen_write_if();
+	acpigen_emit_byte(LEQUAL_OP);
+	acpigen_emit_byte(LOCAL0_OP);
+	acpigen_write_uuid(UUID_DSM_GPIO);
+	acpigen_write_to_integer(ARG2_OP, LOCAL1_OP);
+
+	/* Function 1: GPIO count (no sensor-local GPIOs); see comment above */
+	acpigen_write_if_lequal_op_int(LOCAL1_OP, 1);
+	acpigen_write_return_integer(0);
+	acpigen_pop_len();
+
+	acpigen_pop_len();	/* If uuid */
+}
+
+/*
  * Generate ASL DSM code for Computer Vision Framework (CVF)
  *
  * Generated ASL:
@@ -432,6 +474,7 @@ static void camera_generate_dsm(const struct device *dev)
 	camera_generate_dsm_sensor(dev);
 	camera_generate_dsm_i2c(dev);
 	camera_generate_dsm_i2c_v2(dev);
+	camera_generate_dsm_gpio(dev);
 	camera_generate_dsm_cvf(dev);
 
 	/* Return (Buffer (One) { 0x0 }) */
@@ -463,6 +506,14 @@ static void camera_fill_ssdb_defaults(struct drivers_intel_mipi_camera_config *c
 
 	if (!config->ssdb.mclk_speed)
 		config->ssdb.mclk_speed = CLK_FREQ_19_2MHZ;
+
+	/*
+	 * lane_config is 0-based (0 = 1 lane) while lanes_used is a count.
+	 * Derive it so SSDB stays consistent; 0 is a valid lane_config and
+	 * cannot be used as an "unset" sentinel.
+	 */
+	if (config->ssdb.lanes_used >= 1 && config->ssdb.lanes_used <= 4)
+		config->ssdb.lane_config = config->ssdb.lanes_used - 1;
 }
 
 /*
@@ -472,7 +523,8 @@ static void camera_fill_ssdb_defaults(struct drivers_intel_mipi_camera_config *c
  * VCM or NVM devices to be grouped together in the camera sensor ACPI device. The OS driver
  * uses the "_DSM" method to disambiguate the I2C resources in the camera sensor ACPI device.
  * Drivers typically query "SSDB" for configuration information (represented as a binary blob
- * dump of struct).
+ * dump of struct). Graph _DSD (ports/endpoints/link-frequencies) is also emitted to help
+ * mainline cio2-bridge / libcamera.
  *
  * Multi ACPI device mode: The drivers for ChromeOS expect the camera sensor device and any
  * related nvram / vcm devices to be separate ACPI devices.
@@ -482,28 +534,12 @@ static void camera_fill_ssdb_defaults(struct drivers_intel_mipi_camera_config *c
  * assumes a camera only has 1 port). The PRT0 table specifies a table for each endpoint
  * (though only 1 endpoint is supported by this implementation so the table only has an
  * "endpoint0" that points to a EP00 table). The EP00 table primarily describes the # of lanes
- * in "data-lanes", a list of frequencies in "list-frequencies", and specifies the name of the
+ * in "data-lanes", a list of frequencies in "link-frequencies", and specifies the name of the
  * other side in "remote-endpoint" (typically "\_SB.PCI0.CIO2").
  */
 static void camera_fill_sensor(const struct device *dev)
 {
 	struct drivers_intel_mipi_camera_config *config = dev->chip_info;
-
-	camera_generate_pld(dev);
-
-	camera_fill_ssdb_defaults(config);
-
-	/* _DSM */
-	camera_generate_dsm(dev);
-
-	if (CONFIG(MIPI_ACPI_TYPE_WINDOWS_LINUX)) {
-		acpigen_write_method_serialized("SSDB", 0);
-		acpigen_write_return_byte_buffer((uint8_t *)&config->ssdb, sizeof(config->ssdb));
-		acpigen_pop_len(); /* Method */
-		return;
-	}
-
-	/* Multi-device mode: add _DSD with endpoint information */
 	struct acpi_dp *ep00 = NULL;
 	struct acpi_dp *prt0 = NULL;
 	struct acpi_dp *dsd = NULL;
@@ -513,6 +549,18 @@ static void camera_fill_sensor(const struct device *dev)
 	const char *remote_name;
 	struct device *cio2 = pcidev_on_root(CIO2_PCI_DEV, CIO2_PCI_FN);
 
+	camera_generate_pld(dev);
+
+	camera_fill_ssdb_defaults(config);
+
+	/* _DSM */
+	camera_generate_dsm(dev);
+
+	/*
+	 * Graph _DSD (port/endpoint, data-lanes, link-frequencies) is useful for
+	 * both ChromeOS and mainline cio2-bridge / libcamera. SSDB remains the
+	 * primary config blob for the Intel/Windows stack.
+	 */
 	ep00 = acpi_dp_new_table("EP00");
 	acpi_dp_add_integer(ep00, "endpoint", DEFAULT_ENDPOINT);
 	acpi_dp_add_integer(ep00, "clock-lanes", 0);
@@ -535,14 +583,12 @@ static void camera_fill_sensor(const struct device *dev)
 
 	remote = acpi_dp_new_table("remote-endpoint");
 
-	if (config->remote_name) {
+	if (config->remote_name)
 		remote_name = config->remote_name;
-	} else {
-		if (cio2)
-			remote_name = acpi_device_path(cio2);
-		else
-			remote_name = DEFAULT_REMOTE_NAME;
-	}
+	else if (cio2)
+		remote_name = acpi_device_path(cio2);
+	else
+		remote_name = DEFAULT_REMOTE_NAME;
 
 	acpi_dp_add_reference(remote, NULL, remote_name);
 	acpi_dp_add_integer(remote, NULL, config->ssdb.link_used);
@@ -560,7 +606,13 @@ static void camera_fill_sensor(const struct device *dev)
 	if (config->ssdb.degree)
 		acpi_dp_add_integer(dsd, "rotation", 180);
 
-	if (config->ssdb.vcm_type) {
+	/*
+	 * lens-focus references a separate VCM ACPI device. Only ChromeOS
+	 * multi-device mode emits VCM devices; Windows/Linux packs the VCM
+	 * address into the sensor _CRS and must not reference a missing
+	 * VCM node (board trees often still set vcm_name for ChromeOS).
+	 */
+	if (config->ssdb.vcm_type && CONFIG(MIPI_ACPI_TYPE_CHROMEOS)) {
 		if (config->vcm_name) {
 			vcm_name = config->vcm_name;
 		} else {
@@ -955,7 +1007,12 @@ static void write_i2c_camera_device(const struct device *dev, const char *scope)
 
 	acpigen_write_device(acpi_device_name(dev));
 
-	/* add power resource */
+	/*
+	 * Local PRIC when has_power_resource is set. May coexist with an
+	 * INT3472 control-logic device (acpi_dep): Windows uses CLDB/_DSM,
+	 * while sensors that do not consume INT3472 regulators still need
+	 * ACPI _PR0 (e.g. imx208).
+	 */
 	if (config->has_power_resource) {
 		acpigen_write_power_res(POWER_RESOURCE_NAME, 0, 0, NULL, 0);
 		acpigen_write_name_integer("STA", 0);
@@ -1002,7 +1059,22 @@ static void write_i2c_camera_device(const struct device *dev, const char *scope)
 		acpigen_write_name_string("_DDN", config->sensor_name);
 	else
 		acpigen_write_name_string("_DDN", config->chip_name);
-	acpigen_write_STA(acpi_device_status(dev));
+	/*
+	 * ChromeOS + local PRIC: skip _DEP on a Win-only INT3472 (pmic_enable
+	 * does not emit it). VCM/NVM keep their _DEP (e.g. on the sensor).
+	 */
+	if (config->acpi_dep &&
+	    !(CONFIG(MIPI_ACPI_TYPE_CHROMEOS) && config->has_power_resource &&
+	      config->device_type == INTEL_ACPI_CAMERA_SENSOR)) {
+		acpigen_write_name("_DEP");
+		acpigen_write_package(1);
+		acpigen_emit_namestring(config->acpi_dep);
+		acpigen_pop_len();		/* Package */
+	}
+	if (config->acpi_sta)
+		acpigen_write_STA_ext(config->acpi_sta);
+	else
+		acpigen_write_STA(acpi_device_status(dev));
 	acpigen_write_method("_DSC", 0);
 	acpigen_write_return_integer(config->max_dstate_for_probe);
 	acpigen_pop_len(); /* Method _DSC */
@@ -1013,17 +1085,19 @@ static void write_i2c_camera_device(const struct device *dev, const char *scope)
 	acpi_device_write_i2c(&i2c);
 
 	/*
-	 * The optional vcm/nvram devices are presumed to be on the same I2C bus as the camera
-	 * sensor.
+	 * Windows/Linux: optional VCM/NVM share the sensor ACPI device _CRS.
+	 * ChromeOS: VCM/NVM are separate devices; do not pack their addresses.
 	 */
-	if (config->device_type == INTEL_ACPI_CAMERA_SENSOR &&
+	if (CONFIG(MIPI_ACPI_TYPE_WINDOWS_LINUX) &&
+	    config->device_type == INTEL_ACPI_CAMERA_SENSOR &&
 	    config->ssdb.vcm_type && config->vcm_address) {
 		struct acpi_i2c i2c_vcm = i2c;
 		i2c_vcm.address = config->vcm_address;
 		acpi_device_write_i2c(&i2c_vcm);
 	}
 
-	if (config->device_type == INTEL_ACPI_CAMERA_SENSOR &&
+	if (CONFIG(MIPI_ACPI_TYPE_WINDOWS_LINUX) &&
+	    config->device_type == INTEL_ACPI_CAMERA_SENSOR &&
 	    config->ssdb.rom_type && config->rom_address) {
 		struct acpi_i2c i2c_rom = i2c;
 		i2c_rom.address = config->rom_address;
@@ -1050,10 +1124,9 @@ static void write_camera_device_common(const struct device *dev)
 		acpigen_write_name("_PR0");
 		acpigen_write_package(1);
 		if (config->pr0)
-			acpigen_emit_namestring(config->pr0); /* External power resource */
+			acpigen_emit_namestring(config->pr0);
 		else
 			acpigen_emit_namestring(POWER_RESOURCE_NAME);
-
 		acpigen_pop_len(); /* _PR0 */
 	}
 
@@ -1075,6 +1148,90 @@ static void write_camera_device_common(const struct device *dev)
 	}
 }
 
+/*
+ * When scope_into_parent is set, the DSDT already declares the IPU/CIO PCI
+ * device (e.g. Device (CIO2) on SKL/KBL). Scope into that object via the
+ * parent ACPI path and emit port/_DSD only.
+ *
+ * Otherwise create Device () under the PCI parent (typical JSL+ boards with
+ * no DSDT IPU0 stub). Returns true if SSDT generation for this device is
+ * complete.
+ */
+static bool camera_fill_existing_cio2(const struct device *dev)
+{
+	struct drivers_intel_mipi_camera_config *config = dev->chip_info;
+	const struct device *pdev;
+	const char *path;
+	char cio2_path[DEVICE_PATH_MAX];
+
+	if (!config->scope_into_parent)
+		return false;
+
+	if (config->device_type != INTEL_ACPI_CAMERA_CIO2)
+		return false;
+
+	pdev = dev->upstream ? dev->upstream->dev : NULL;
+	if (!pdev || pdev->path.type != DEVICE_PATH_PCI) {
+		printk(BIOS_ERR,
+		       "%s: CIO2 chip must be nested under the IPU/CIO PCI device\n",
+		       dev_path(dev));
+		return false;
+	}
+
+	path = acpi_device_path(pdev);
+	if (!path) {
+		printk(BIOS_ERR, "%s: failed to get ACPI path for %s\n",
+		       dev_path(dev), dev_path(pdev));
+		return false;
+	}
+	snprintf(cio2_path, sizeof(cio2_path), "%s", path);
+
+	acpigen_write_scope(cio2_path);
+	camera_fill_cio2(dev);
+	acpigen_pop_len(); /* Scope */
+	printk(BIOS_INFO, "%s: %s (existing device)\n", cio2_path,
+	       dev->chip_ops->name);
+	return true;
+}
+
+/*
+ * Create Device (IPU0/...) under the PCI parent and emit port/_DSD.
+ * Used when scope_into_parent is unset (no DSDT IPU/CIO stub).
+ */
+static void camera_fill_new_cio2(const struct device *dev)
+{
+	struct drivers_intel_mipi_camera_config *config = dev->chip_info;
+	const struct device *pdev = dev->upstream->dev;
+	const char *scope;
+
+	if (config->device_type != INTEL_ACPI_CAMERA_CIO2)
+		return;
+
+	if (!pdev || pdev->path.type != DEVICE_PATH_PCI) {
+		printk(BIOS_ERR,
+		       "%s: CIO2 chip must be nested under the IPU/CIO PCI device\n",
+		       dev_path(dev));
+		return;
+	}
+
+	scope = acpi_device_scope(pdev);
+	if (!scope) {
+		printk(BIOS_ERR, "Failed to get scope for device %s\n",
+		       dev_path(pdev));
+		return;
+	}
+
+	acpigen_write_scope(scope);
+	write_pci_camera_device(pdev);
+	write_camera_device_common(dev);
+	acpigen_pop_len(); /* Device */
+	acpigen_pop_len(); /* Scope */
+
+	printk(BIOS_INFO, "%s: %s at PCI %02x.%01x\n", acpi_device_path(pdev),
+	       dev->chip_ops->name, PCI_SLOT(pdev->path.pci.devfn),
+	       PCI_FUNC(pdev->path.pci.devfn));
+}
+
 static void camera_fill_ssdt(const struct device *dev)
 {
 	struct drivers_intel_mipi_camera_config *config = dev->chip_info;
@@ -1082,13 +1239,22 @@ static void camera_fill_ssdt(const struct device *dev)
 	const struct device *pdev = dev->upstream->dev;
 
 	if (CONFIG(MIPI_ACPI_TYPE_WINDOWS_LINUX)) {
-		/* Only generate SSDT for an i2c-attached sensor device */
-		if (dev->path.type != DEVICE_PATH_I2C || config->device_type != INTEL_ACPI_CAMERA_SENSOR)
+		if (dev->path.type == DEVICE_PATH_GENERIC &&
+		    config->device_type == INTEL_ACPI_CAMERA_CIO2) {
+			if (!camera_fill_existing_cio2(dev))
+				camera_fill_new_cio2(dev);
+			return;
+		}
+
+		/* Sensors: generate SSDT for an i2c-attached SENSOR only */
+		if (dev->path.type != DEVICE_PATH_I2C ||
+		    config->device_type != INTEL_ACPI_CAMERA_SENSOR)
 			return;
 
 		scope = acpi_device_scope(dev);
 		if (!scope) {
-			printk(BIOS_ERR, "Failed to get scope for device %s\n", dev_path(dev));
+			printk(BIOS_ERR, "Failed to get scope for device %s\n",
+			       dev_path(dev));
 			return;
 		}
 
@@ -1135,6 +1301,13 @@ static void camera_fill_ssdt(const struct device *dev)
 		write_i2c_camera_device(dev, scope);
 		break;
 	case DEVICE_PATH_GENERIC:
+		if (camera_fill_existing_cio2(dev))
+			return;
+		if (config->device_type == INTEL_ACPI_CAMERA_CIO2) {
+			camera_fill_new_cio2(dev);
+			return;
+		}
+
 		scope = acpi_device_scope(pdev);
 		if (!scope)
 			return;
@@ -1219,6 +1392,13 @@ static struct device_operations camera_ops = {
 
 static void camera_enable(struct device *dev)
 {
+	/*
+	 * Board provides full camera ASL (e.g. nautilus/soraka ChromeOS).
+	 * Keep the driver selected so chip_ops link; do not attach ops.
+	 */
+	if (CONFIG(VARIANT_HAS_CAMERA_ACPI))
+		return;
+
 	/* Validate Camera Parameters */
 	struct drivers_intel_mipi_camera_config *config = dev->chip_info;
 	bool params_error = false;

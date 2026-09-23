@@ -13,7 +13,6 @@ config SOC_INTEL_PANTHERLAKE_BASE
 	select CPU_INTEL_FIRMWARE_INTERFACE_TABLE
 	select CPU_SUPPORTS_INTEL_TME
 	select CPU_SUPPORTS_PM_TIMER_EMULATION
-	select DEFAULT_SOFTWARE_CONNECTION_MANAGER
 	select DEFAULT_X2APIC_LATE_WORKAROUND
 	select POSTPONE_SPI_ACCESS
 	select DISPLAY_FSP_VERSION_INFO_2
@@ -43,7 +42,7 @@ config SOC_INTEL_PANTHERLAKE_BASE
 	select INTEL_GMA_VERSION_2
 	select INTEL_KEYLOCKER
 	select IOAPIC
-	select MICROCODE_BLOB_UNDISCLOSED if !SOC_INTEL_PANTHERLAKE_U_H
+	select MICROCODE_BLOB_UNDISCLOSED if !SOC_INTEL_PANTHERLAKE_U_H && !SOC_INTEL_WILDCATLAKE
 	select MP_SERVICES_PPI_V2
 	select MRC_CACHE_USING_MRC_VERSION
 	select MRC_SETTINGS_PROTECT
@@ -170,6 +169,9 @@ config SOC_INTEL_WILDCATLAKE
 	  Choose this option if the mainboard is built using WCL system-on-a-chip (SoC).
 
 if SOC_INTEL_PANTHERLAKE_BASE
+
+config DEFAULT_SOFTWARE_CONNECTION_MANAGER
+	default y
 
 config SOC_INTEL_PANTHERLAKE_TCSS_USB4_SUPPORT
 	bool
@@ -383,11 +385,13 @@ config FSP_HEADER_PATH
 	default "src/vendorcode/intel/fsp/fsp2_0/wildcatlake" if !FSP_USE_REPO && SOC_INTEL_WILDCATLAKE
 	default "src/vendorcode/intel/fsp/fsp2_0/pantherlake/" if !FSP_USE_REPO
 	default "3rdparty/fsp/PantherLakeFspBinPkg/IoT/PantherLake/Include/" if FSP_TYPE_IOT && SOC_INTEL_PANTHERLAKE
+	default "3rdparty/fsp/WildcatLakeFspBinPkg/IoT/WildcatLake/Include/" if FSP_TYPE_IOT && SOC_INTEL_WILDCATLAKE
 
 config FSP_FD_PATH
 	string
 	depends on FSP_USE_REPO
 	default "3rdparty/fsp/PantherLakeFspBinPkg/IoT/PantherLake/Fsp.fd"   if FSP_TYPE_IOT && SOC_INTEL_PANTHERLAKE
+	default "3rdparty/fsp/WildcatLakeFspBinPkg/IoT/WildcatLake/Fsp.fd"   if FSP_TYPE_IOT && SOC_INTEL_WILDCATLAKE
 
 # Override platform debug consent value:
 #  0: Disabled,

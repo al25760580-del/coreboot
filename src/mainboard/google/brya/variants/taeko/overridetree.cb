@@ -133,7 +133,7 @@ chip soc/intel/alderlake
 		[PchSerialIoIndexI2C1]  = PchSerialIoPci,
 		[PchSerialIoIndexI2C2]  = PchSerialIoPci,
 		[PchSerialIoIndexI2C3]  = PchSerialIoPci,
-		[PchSerialIoIndexI2C4]  = PchSerialIoDisabled,
+		[PchSerialIoIndexI2C4]  = PchSerialIoPci,
 		[PchSerialIoIndexI2C5]  = PchSerialIoPci,
 	}"
 	device domain 0 on
@@ -505,6 +505,7 @@ chip soc/intel/alderlake
 				device i2c 10 on end
 			end
 		end
+		device ref i2c4 on end
 		device ref i2c5 on
 			chip drivers/i2c/generic
 				register "hid" = ""ELAN0000""
@@ -686,6 +687,10 @@ chip soc/intel/alderlake
 						register "desc" = ""USB2 Bluetooth""
 						register "type" = "UPC_TYPE_INTERNAL"
 						register "is_intel_bluetooth" = "1"
+						register "cnvi_bt_en_gpio" =
+							"ACPI_GPIO_OUTPUT_ACTIVE_HIGH(GPP_VGPIO_0)"
+						register "cnvi_bt_if_select_gpio" =
+							"ACPI_GPIO_OUTPUT_ACTIVE_HIGH(GPP_VGPIO_5)"
 						register "reset_gpio" =
 							"ACPI_GPIO_OUTPUT_ACTIVE_LOW(GPP_D4)"
 						device ref usb2_port10 on end

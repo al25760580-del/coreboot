@@ -101,6 +101,17 @@ chip soc/intel/pantherlake
 		},
 	}"
 
+	# Acoustic Noise settings and slew rate configuration:
+	register "enable_acoustic_noise_mitigation" = "true"
+	register "disable_fast_pkgc_ramp[VR_DOMAIN_IA]" = "false"
+	register "slow_slew_rate_config[VR_DOMAIN_IA]" = "SLEW_FAST_4"
+	register "disable_fast_pkgc_ramp[VR_DOMAIN_GT]" = "true"
+	register "slow_slew_rate_config[VR_DOMAIN_GT]" = "SLEW_FAST_8"
+	register "disable_fast_pkgc_ramp[VR_DOMAIN_SA]" = "false"
+	register "slow_slew_rate_config[VR_DOMAIN_SA]" = "SLEW_FAST_4"
+	register "pcore_hysteresis_window_ms" = "30"	#ms
+	register "ecore_hysteresis_window_ms" = "30"	#ms
+
 	device domain 0 on
 		subsystemid 0x1043 0x15e4 inherit
 		device ref dtt on
@@ -376,8 +387,8 @@ chip soc/intel/pantherlake
 				register "dev_hidi2c.intf.hidi2c.descriptor_address" = "0x01"
 				register "dev_hidi2c.intf.hidi2c.interrupt_delay_value" = "100"
 				register "dev_hidi2c.intf.hidi2c.max_frame_size_value" = "128"
-				register "soc_hidi2c.fm_scl_low_period" = "160"
-				register "soc_hidi2c.fm_scl_high_period" = "146"
+				register "soc_hidi2c.fm_scl_low_period" = "157"
+				register "soc_hidi2c.fm_scl_high_period" = "136"
 				register "wake_on_touch" = "true"
 				# NOTE: Use GpioInt() in _CRS and does not use GPE.
 				register "wake_gpio" = "ACPI_GPIO_IRQ_LEVEL_LOW_WAKE(GPP_VGPIO3_THC0)"

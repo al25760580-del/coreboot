@@ -2,6 +2,7 @@
 
 #include "board.h"
 
+#include <bootmode.h>
 #include <delay.h>
 #include <ec/google/chromeec/ec.h>
 #include <reset.h>
@@ -34,6 +35,18 @@
 #define SMBx_SCHG_TYPE_C_SUSPEND_LEGACY_CHARGERS(x) \
 (((x) << 16) | SCHG_TYPE_C_SUSPEND_LEGACY_CHARGERS)
 
+#define SCHG_CHGR_PRE_CHARGE_CURRENT_CFG 0x2660
+#define PRE_CHARGE_CURRENT_250MA_STEP_50MA 0x5 /* 50mA * 5 */
+#define SMB1_CHGR_MAX_PRE_CHARGE_CFG ((SMB1_SLAVE_ID << 16) | SCHG_CHGR_PRE_CHARGE_CURRENT_CFG)
+#define SMB2_CHGR_MAX_PRE_CHARGE_CFG ((SMB2_SLAVE_ID << 16) | SCHG_CHGR_PRE_CHARGE_CURRENT_CFG)
+#define SMB3_CHGR_MAX_PRE_CHARGE_CFG ((SMB3_SLAVE_ID << 16) | SCHG_CHGR_PRE_CHARGE_CURRENT_CFG)
+
+#define SCHG_CHGR_STATUS_REG 0x2606
+#define SMB1_CHGR_STATUS_REG ((SMB1_SLAVE_ID << 16) | SCHG_CHGR_STATUS_REG)
+#define SMB2_CHGR_STATUS_REG ((SMB2_SLAVE_ID << 16) | SCHG_CHGR_STATUS_REG)
+#define SMB3_CHGR_STATUS_REG ((SMB3_SLAVE_ID << 16) | SCHG_CHGR_STATUS_REG)
+#define CHGR_STATUS_MASK 0x07
+#define CHGR_STATUS_FAST_CHARGE 0x03
 #define SCHG_CHGR_CHARGING_FCC 0x260A
 #define SMB1_CHGR_CHARGING_FCC ((SMB1_SLAVE_ID << 16) | SCHG_CHGR_CHARGING_FCC)
 #define SMB2_CHGR_CHARGING_FCC ((SMB2_SLAVE_ID << 16) | SCHG_CHGR_CHARGING_FCC)
@@ -65,7 +78,8 @@
 #define DELAY_CHARGING_ACTIVE_LB_MS 4000 /* 4sec */
 #define SMB_FCC_MULTIPLIER_MA 50
 #define SMB_READ_DELAY_MS 5
-
+#define ICURR_READ_RETRY_COUNT 5
+#define ICURR_READ_RETRY_DELAY_MS 100 /* 5 * 100ms = 500ms total window */
 enum charging_status {
 	CHRG_DISABLE,
 	CHRG_ENABLE,
@@ -89,6 +103,24 @@ void init_sdam_config(void)
 	for (size_t i = 0; i < count; i++)
 		spmi_rmw8(default_sdam_config[i].addr, default_sdam_config[i].mask,
 				default_sdam_config[i].value);
+}
+
+/*
+ * Check if the SMBxxxx charger has transitioned from trickle/pre-charge
+ * into fast charge mode (BATFET closed and FCC loop engaged).
+ */
+bool is_fast_charge_ready(void)
+{
+	int smb1_status1 = spmi_read8_safe(SMB1_CHGR_STATUS_REG);
+	int smb2_status1 = spmi_read8_safe(SMB2_CHGR_STATUS_REG);
+	int smb3_status1 = spmi_read8_safe(SMB3_CHGR_STATUS_REG);
+
+	if ((smb1_status1 >= 0 && (smb1_status1 & CHGR_STATUS_MASK) == CHGR_STATUS_FAST_CHARGE) ||
+	    (smb2_status1 >= 0 && (smb2_status1 & CHGR_STATUS_MASK) == CHGR_STATUS_FAST_CHARGE) ||
+	    (smb3_status1 >= 0 && (smb3_status1 & CHGR_STATUS_MASK) == CHGR_STATUS_FAST_CHARGE))
+		return true;
+
+	return false;
 }
 
 /*
@@ -140,19 +172,32 @@ static int get_battery_icurr_ma(void)
 		SMB2_CHGR_CHARGING_FCC,
 		SMB3_CHGR_CHARGING_FCC,
 	};
-
 	int icurr = 0;
-	for (size_t i = 0; i < ARRAY_SIZE(smb_regs); i++) {
-		mdelay(SMB_READ_DELAY_MS);
-		icurr = spmi_read8_safe(smb_regs[i]);
 
-		if (icurr > 0)
-			return icurr * SMB_FCC_MULTIPLIER_MA;
+	for (int retry = 0; retry < ICURR_READ_RETRY_COUNT; retry++) {
+		for (size_t i = 0; i < ARRAY_SIZE(smb_regs); i++) {
+			mdelay(SMB_READ_DELAY_MS);
+			icurr = spmi_read8_safe(smb_regs[i]);
+			/* Valid charging current detected */
+			if (icurr > 0)
+				return icurr * SMB_FCC_MULTIPLIER_MA;
+		}
+
+		/* Transient drop to zero: wait before next retry */
+		if (retry < ICURR_READ_RETRY_COUNT - 1) {
+			printk(BIOS_DEBUG, "Transient zero icurr (retry %d/%d)\n",
+			       retry + 1, ICURR_READ_RETRY_COUNT);
+			mdelay(ICURR_READ_RETRY_DELAY_MS);
+		}
 	}
 
-	printk(BIOS_ERR, "Critical: All SMB registers failed to read.\n");
+	/* Final safety: if all failed (still negative), treat as 0 */
+	if (icurr < 0)
+		printk(BIOS_ERR, "Critical: All SMB registers failed to read.\n");
+
 	return 0;
 }
+
 
 static void clear_ec_manual_poweron_event(void)
 {
@@ -363,6 +408,12 @@ void enable_slow_battery_charging(void)
 	spmi_write8(SMB1_CHGR_MAX_FCC_CFG, FCC_3A_STEP_50MA);
 	spmi_write8(SMB2_CHGR_MAX_FCC_CFG, FCC_3A_STEP_50MA);
 	spmi_write8(SMB3_CHGR_MAX_FCC_CFG, FCC_3A_STEP_50MA);
+
+	/* Set pre-charge current to 1A so recovery completes quickly */
+	spmi_write8(SMB1_CHGR_MAX_PRE_CHARGE_CFG, PRE_CHARGE_CURRENT_250MA_STEP_50MA);
+	spmi_write8(SMB2_CHGR_MAX_PRE_CHARGE_CFG, PRE_CHARGE_CURRENT_250MA_STEP_50MA);
+	spmi_write8(SMB3_CHGR_MAX_PRE_CHARGE_CFG, PRE_CHARGE_CURRENT_250MA_STEP_50MA);
+
 	spmi_write8(SMB1_CHGR_CHRG_EN_CMD, CHRG_ENABLE);
 	spmi_write8(SMB2_CHGR_CHRG_EN_CMD, CHRG_ENABLE);
 	spmi_write8(SMB3_CHGR_CHRG_EN_CMD, CHRG_ENABLE);
@@ -390,6 +441,37 @@ void disable_slow_battery_charging(void)
 void enable_fast_battery_charging(void)
 {
 	/* TODO */
+}
+
+bool is_low_power_boot_with_charger(void)
+{
+	bool ret = false;
+	enum boot_mode_t boot_mode = get_boot_mode();
+	if ((boot_mode == LB_BOOT_MODE_LOW_BATTERY_CHARGING) ||
+	    (boot_mode == LB_BOOT_MODE_OFFMODE_CHARGING) ||
+	    (boot_mode == LB_BOOT_MODE_RTC_WAKE))
+		ret = true;
+
+	return ret;
+}
+
+bool board_support_dead_battery_charging(void)
+{
+	uint32_t capacity;
+
+	if (!CONFIG(EC_GOOGLE_CHROMEEC))
+		return false;
+
+	if (google_chromeec_read_batt_remaining_capacity(&capacity) < 0) {
+		printk(BIOS_WARNING, "Failed to get battery capacity; defaulting to slow charging\n");
+		return true;
+	}
+
+	/*
+	 * If the remaining battery capacity is less than or equal to the
+	 * threshold, set dead battery charging mode.
+	 */
+	return capacity <= DEAD_BATT_CHG_THRESHOLD_MAH;
 }
 
 bool platform_get_battery_soc_information(uint32_t *batt_pct)
